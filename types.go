@@ -82,4 +82,10 @@ type CompileOptions struct {
 	FixedVersions []FixedVersion
 	// MatchMain 表示所有边界比较都忽略预发布和附加修订字段。
 	MatchMain bool
+	// StrictBoundaries 禁止无后缀边界自动启用 MatchMain。
+	//
+	// 默认值 false 保留历史兼容行为，例如 [21.0.0] 可以命中
+	// 21.0.0-pre1。设为 true 时，边界会完整比较预发布和附加修订字段；
+	// 显式设置 MatchMain 时，MatchMain 的行为优先。
+	StrictBoundaries bool
 }

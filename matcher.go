@@ -27,15 +27,16 @@ type compiledInterval struct {
 // Matcher 在编译后不再修改内部状态，可由多个 goroutine 并发调用。零值 Matcher
 // 不可用，应通过 Compile 创建。
 type Matcher struct {
-	any       bool
-	kind      versioncore.Kind
-	intervals []compiledInterval
-	fixed     []compiledFixed
-	matchMain bool
+	any              bool
+	kind             versioncore.Kind
+	intervals        []compiledInterval
+	fixed            []compiledFixed
+	matchMain        bool
+	strictBoundaries bool
 }
 
 // Compile 编译漏洞范围及固定版本分支。
-// expression 是漏洞范围，options 指定版本类型、固定分支和主版本匹配行为。
+// expression 是漏洞范围，options 指定版本类型、固定分支和边界匹配行为。
 // 表达式、版本类型或固定分支无效时会打印日志并返回可通过 errors.Is 检查的错误。
 func Compile(expression string, options CompileOptions) (*Matcher, error) {
 	matcher, err := compile(expression, options)
@@ -59,10 +60,11 @@ func compile(expression string, options CompileOptions) (*Matcher, error) {
 		return nil, err
 	}
 	matcher := &Matcher{
-		any:       parsedExpression.Any,
-		kind:      kind,
-		fixed:     fixedVersions,
-		matchMain: options.MatchMain,
+		any:              parsedExpression.Any,
+		kind:             kind,
+		fixed:            fixedVersions,
+		matchMain:        options.MatchMain,
+		strictBoundaries: options.StrictBoundaries,
 	}
 	if matcher.any {
 		return matcher, nil
@@ -231,5 +233,5 @@ func (m *Matcher) effectiveUpper(candidate versioncore.Version, original compile
 }
 
 func (m *Matcher) boundMatchMain(bound compiledBound) bool {
-	return m.matchMain || bound.autoMatchMain
+	return m.matchMain || (!m.strictBoundaries && bound.autoMatchMain)
 }

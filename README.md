@@ -105,6 +105,25 @@ for _, version := range []string{"1.1.1a", "1.1.1t", "3.0.0"} {
 
 普通组件范围的无后缀端点默认只约束主版本和字母补丁号，以兼容既有漏洞数据。例如 `[21.0.0,21.0.0]` 可以命中 `21.0.0-pre1`。显式预发布窗口 `[6.7-rc1,6.7)` 会严格比较后缀，因此不会错误命中正式版 `6.7`。
 
+需要让无后缀端点也完整比较预发布和附加修订字段时，可启用严格边界模式：
+
+```go
+matcher, err := versioncompare.Compile("[21.0.0]", versioncompare.CompileOptions{
+    StrictBoundaries: true,
+})
+if err != nil {
+    return err
+}
+
+affected, err := matcher.Match("21.0.0-pre1")
+if err != nil {
+    return err
+}
+fmt.Println(affected) // false
+```
+
+`StrictBoundaries` 会同时作用于精确值、区间上下界和 `FixedVersions` 生成的排他上界。它只关闭自动 `MatchMain`；如果同时显式设置 `MatchMain: true`，仍按调用方的显式要求忽略预发布和附加修订字段。该选项默认关闭，因此现有调用方行为不变。
+
 ## 分支修复版本 `Fixed`
 
 分支修复版本表示某个维护分支的首个安全版本。命中分支后，它会作为排他上界收紧漏洞范围；修复版本本身不受影响。修复版本只允许缩小原范围，不会扩大影响面。

@@ -26,13 +26,27 @@ func splitEmbeddedMetadata(value string) (version, osVersion, architecture strin
 }
 
 func isDistributionReleaseToken(value string) bool {
-	prefixes := [...]string{"an", "el", "fc", "oe", "amzn", "alinux", "sles", "lp"}
+	prefixes := [...]string{"an", "el", "fc", "oe", "amzn", "alinux", "sles", "lp", "ky"}
 	for _, prefix := range prefixes {
-		if strings.HasPrefix(value, prefix) && allReleaseDigits(value[len(prefix):]) {
+		if strings.HasPrefix(value, prefix) && isReleaseIdentifier(value[len(prefix):]) {
 			return true
 		}
 	}
 	return false
+}
+
+func isReleaseIdentifier(value string) bool {
+	if value == "" || value[0] < '0' || value[0] > '9' {
+		return false
+	}
+	for index := range value {
+		character := value[index]
+		if character >= '0' && character <= '9' || character >= 'a' && character <= 'z' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func normalizeOSRelease(distribution, value string) string {
@@ -50,6 +64,7 @@ func normalizeOSRelease(distribution, value string) string {
 	switch {
 	case key == "anolis":
 		value = trimReleasePrefix(value, "anolis os", "anolisos", "anolis", "an")
+		value = leadingReleaseNumber(value)
 	case key == "ubuntu":
 		value = trimReleasePrefix(value, "ubuntu")
 	case key == "debian" || key == "deb" || key == "dpkg":
@@ -60,6 +75,7 @@ func normalizeOSRelease(distribution, value string) string {
 		value = trimReleasePrefix(value, "fedora", "fc")
 	case key == "openeuler":
 		value = trimReleasePrefix(value, "openeuler", "euleros", "oe")
+		value = canonicalOpenEulerRelease(value)
 	case key == "amazonlinux":
 		value = trimReleasePrefix(value, "amazon linux", "amazonlinux", "amzn")
 	case key == "alinux":
@@ -88,8 +104,39 @@ func normalizeOSRelease(distribution, value string) string {
 		value = trimReleasePrefix(value, "manjaro linux", "manjaro")
 	case key == "endeavouros":
 		value = trimReleasePrefix(value, "endeavouros")
+	case key == "kylin":
+		value = trimReleasePrefix(value, "kylin linux advanced server", "kylin linux", "kylin", "ky", "v")
+		value = leadingReleaseNumber(value)
 	}
 	return strings.TrimSpace(value)
+}
+
+func canonicalOpenEulerRelease(value string) string {
+	// openEuler 的同一 SP 可能在 release 标记后追加 64kb 等构建变体。历史关联逻辑按
+	// 已知发行版标记的最长前缀归属，继续保留该语义，同时避免 oe2203 基础版吞掉 SP。
+	known := [...]string{
+		"2003sp1", "2003sp2", "2003sp3", "2003sp4",
+		"2203sp1", "2203sp2", "2203sp3", "2203sp4",
+		"2403sp1", "2403sp2", "2403sp3", "2403sp4",
+		"2003", "2203", "2403", "1",
+	}
+	for _, release := range known {
+		if strings.HasPrefix(value, release) {
+			return release
+		}
+	}
+	return value
+}
+
+func leadingReleaseNumber(value string) string {
+	end := 0
+	for end < len(value) && value[end] >= '0' && value[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		return value
+	}
+	return value[:end]
 }
 
 func trimReleasePrefix(value string, prefixes ...string) string {
@@ -108,18 +155,6 @@ func trimReleasePrefix(value string, prefixes ...string) string {
 			return value
 		}
 	}
-}
-
-func allReleaseDigits(value string) bool {
-	if value == "" {
-		return false
-	}
-	for index := range value {
-		if value[index] < '0' || value[index] > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 func distributionMatches(candidate, constraint Distribution) bool {

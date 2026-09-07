@@ -94,6 +94,30 @@ func TestLegacyRangeCompatibility(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "OpenHarmony 标签区间",
+			exp: VersionExp{
+				Version:    "OpenHarmony-v3.0.3-LTS",
+				Expression: "[OpenHarmony-v3.0-LTS,OpenHarmony-v3.0.3-LTS]",
+			},
+			want: true,
+		},
+		{
+			name: "OpenHarmony 标签超出区间",
+			exp: VersionExp{
+				Version:    "OpenHarmony-v3.0.5-LTS",
+				Expression: "[OpenHarmony-v3.0-LTS,OpenHarmony-v3.0.3-LTS]",
+			},
+			want: false,
+		},
+		{
+			name: "OpenHarmony 多范围精确标签",
+			exp: VersionExp{
+				Version:    "OpenHarmony-v3.1-Release",
+				Expression: "[OpenHarmony-v3.0-LTS,OpenHarmony-v3.0.3-LTS]||OpenHarmony-v3.1-Release",
+			},
+			want: true,
+		},
+		{
 			name: "尾零等价",
 			exp:  VersionExp{Version: "21", Expression: "[21.0.0]"},
 			want: true,

@@ -2,6 +2,31 @@ package osversion
 
 import "testing"
 
+// TestSplitEmbeddedMetadataServicePack 验证带 SP 后缀及 Kylin 标记的发行版信息可从旧版本串提取。
+func TestSplitEmbeddedMetadataServicePack(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input        string
+		distribution string
+		wantRelease  string
+		wantArch     string
+	}{
+		{input: "1.1.1f-9.oe2203sp1/x86_64", distribution: "openeuler", wantRelease: "2203sp1", wantArch: "x86_64"},
+		{input: "1.1.1f-9.oe2203sp164kb/aarch64", distribution: "openeuler", wantRelease: "2203sp1", wantArch: "aarch64"},
+		{input: "5.10-2.ky10sp1/aarch64", distribution: "kylin", wantRelease: "10", wantArch: "aarch64"},
+		{input: "5.10-2.an8plus/x86_64", distribution: "anolis", wantRelease: "8", wantArch: "x86_64"},
+	}
+	for _, test := range tests {
+		_, release, architecture := splitEmbeddedMetadata(test.input)
+		release = normalizeOSRelease(test.distribution, release)
+		if release != test.wantRelease || architecture != test.wantArch {
+			t.Fatalf("normalized metadata %q = release %q, arch %q", test.input, release, architecture)
+		}
+	}
+}
+
+// TestNormalizeOSRelease 验证常见发行版展示值会规范化为可比较的发行版本。
 func TestNormalizeOSRelease(t *testing.T) {
 	t.Parallel()
 
@@ -29,6 +54,7 @@ func TestNormalizeOSRelease(t *testing.T) {
 	}
 }
 
+// TestDistributionAliasesMatch 验证发行版名称、简称和算法族别名保持兼容。
 func TestDistributionAliasesMatch(t *testing.T) {
 	t.Parallel()
 

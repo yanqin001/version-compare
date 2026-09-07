@@ -45,6 +45,96 @@ func TestMatcherCompatibility(t *testing.T) {
 	}
 }
 
+// TestMatcherStrictBoundaries 验证严格边界只关闭自动 MatchMain，且显式 MatchMain 仍优先。
+func TestMatcherStrictBoundaries(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		expression string
+		version    string
+		options    CompileOptions
+		want       bool
+	}{
+		{
+			name:       "默认精确值保留主版本兼容",
+			expression: "[21.0.0]",
+			version:    "21.0.0-pre1",
+			want:       true,
+		},
+		{
+			name:       "严格精确值比较后缀",
+			expression: "[21.0.0]",
+			version:    "21.0.0-pre1",
+			options:    CompileOptions{StrictBoundaries: true},
+			want:       false,
+		},
+		{
+			name:       "严格精确值仍匹配正式版",
+			expression: "[21.0.0]",
+			version:    "21.0.0",
+			options:    CompileOptions{StrictBoundaries: true},
+			want:       true,
+		},
+		{
+			name:       "严格区间下界比较后缀",
+			expression: "[21.0.0,22.0.0)",
+			version:    "21.0.0-pre1",
+			options:    CompileOptions{StrictBoundaries: true},
+			want:       false,
+		},
+		{
+			name:       "显式主版本匹配优先于严格边界",
+			expression: "[21.0.0]",
+			version:    "21.0.0-pre1",
+			options: CompileOptions{
+				MatchMain:        true,
+				StrictBoundaries: true,
+			},
+			want: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			matcher, err := Compile(test.expression, test.options)
+			if err != nil {
+				t.Fatalf("Compile() error = %v", err)
+			}
+			got, err := matcher.Match(test.version)
+			if err != nil {
+				t.Fatalf("Match() error = %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("Match() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+// TestMatcherStrictBoundariesApplyToFixedVersion 验证固定修复版本也完整比较预发布后缀。
+func TestMatcherStrictBoundariesApplyToFixedVersion(t *testing.T) {
+	t.Parallel()
+
+	options := CompileOptions{
+		FixedVersions:    []FixedVersion{{Branch: "21.0", Version: "21.0.1"}},
+		StrictBoundaries: true,
+	}
+	matcher, err := Compile("[20.0.0,22.0.0)", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 修复版本是排他上界，其预发布版本仍早于修复版本，应继续视为受影响。
+	matched, err := matcher.Match("21.0.1-rc1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !matched {
+		t.Fatal("Match() = false, want true")
+	}
+}
+
 func TestMatcherFixedVersion(t *testing.T) {
 	t.Parallel()
 
