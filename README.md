@@ -1,6 +1,6 @@
 # version-compare
 
-`version-compare` 是一个零外部依赖的 Go 版本比较与漏洞范围匹配库。它既保留了旧项目使用的 `VersionSvc` 契约，也提供可复用、并发安全的编译 Matcher；操作系统软件包则由独立的 `osversion` 子包按发行版原生规则处理。
+`version-compare` 是一个 Go 版本比较与漏洞范围匹配库。它保留旧项目使用的 `VersionSvc` 契约和可复用、并发安全的编译 Matcher；`osversion` 子包按发行版原生规则处理操作系统软件包，`versionrange` 子包提供显式分类的发布版本比较。
 
 主要能力：
 
@@ -11,11 +11,12 @@
 - 按 RPM、Debian/dpkg、Alpine/apk 和 Arch Linux/ALPM 规则比较 OS 软件包版本；
 - 联合匹配发行版、OS 版本、软件包版本和架构；
 - 对未知发行版保留旧系统的 generic OS 比较行为。
+- 按数字、日历、生态版本或明确的自定义顺序比较结构化范围，支持声明标签前后缀。
 
 ## 要求与安装
 
-- Go 1.23 或更高版本；
-- 运行时只使用 Go 标准库。
+- Go 1.23.4 或更高版本；
+- 根包和 `osversion` 只使用 Go 标准库；`versionrange` 的生态规则依赖固定版本的 `deps.dev/util/semver`。
 
 ```bash
 go get github.com/yanqin001/version-compare@latest
@@ -80,6 +81,59 @@ for _, version := range []string{"1.1.1a", "1.1.1t", "3.0.0"} {
 ```
 
 `Matcher` 编译后不可变，可由多个 goroutine 并发复用。它会复制 `CompileOptions` 中的分支修复数据，不保留调用方切片。
+
+## 显式分类比较（v1.1.0）
+
+新数据已声明版本体系时，使用独立子包；旧 `VersionSvc`、`Compile` 和 `osversion` API 及默认行为保持不变。
+
+```go
+import "github.com/yanqin001/version-compare/versionrange"
+
+classification := versionrange.Classification{
+    RangeType:     versionrange.TypeVersion,
+    VersionScheme: "pep440",
+}
+comparator, err := versionrange.NewComparator(classification)
+if err != nil {
+    return err
+}
+order, err := comparator.Compare("3.15.0a1", "3.15.0rc3")
+if err != nil {
+    return err
+}
+fmt.Println(order) // -1
+err = classification.ValidateRange("3.15.0a1", "3.15.0rc3", false)
+```
+
+`Compare` 返回标准 `-1/0/1`，与旧 `VersionSvc.Compare` 的 `0/1/2` 不同。`ValidateRange(begin, end, endInclusive)` 校验顺序，默认半开区间要求 `begin < end`，闭区间允许相等；实际命中判断、区间并集和业务处置由调用方负责。结构化边界直接比较，不经过表达式解析，因此固定包装中的括号不再成为表达式语法错误。
+
+| `range_type` / `version_scheme` | 比较语义 |
+| --- | --- |
+| `VERSION` / `numeric` | 任意精度数字段；尾部零等价 |
+| `VERSION` / `calver` | 点、横线或下划线分隔的日历数字段，不使用外部发布日期 |
+| `VERSION` / `semver`、`pep440`、`maven`、`go`、`npm`、`cargo`、`nuget`、`rubygems`、`composer` | `deps.dev/util/semver` 对应生态的版本顺序；不执行依赖范围解析 |
+| `VERSION` / `dpkg`、`rpm`、`apk`、`alpm` | 复用 `osversion` 的发行版原生顺序 |
+| `VERSION` / `custom` | 按 `version_order` 的完整原始标签顺序比较；清单外版本不可比较 |
+| `GIT`、`UNKNOWN` | 不推断顺序，创建比较器返回 `ErrUnordered`；不查询 Git 祖先关系 |
+
+分类字段使用同名 JSON：`range_type`、`version_scheme`、`ref_kind`、`version_prefix`、`version_suffix`、`version_order`。`VERSION` 的 `ref_kind` 只能为空或 `tag`；`GIT` 必须声明 `commit/tag/branch/alias`，且与 `UNKNOWN` 一样不携带 `version_scheme` 或数字包装。
+
+`version_prefix` / `version_suffix` 必须同时适用于边界和候选，例如 `numeric + version_prefix=b` 比较 `b999 < b1000`；`semver + version_suffix=(jdk8/11)` 比较 `v2.6.0(jdk8/11) < v2.7.0(jdk8/11)`。不符合包装的候选返回错误，不随意删字母。`custom` 使用完整原始标签，不能再配置包装。
+
+发布标签支持 `release-` / `release_`、数字版本的 `v` 前缀和 `-stable/-final/-ga/-custom` 正式版别名；`numeric/semver` 也支持将 `r1v60`、`r1rv78` 识别为 `1.60`、`1.78`。OS 原生版本和 `custom` 不应用这些别名。40/64 位完整十六进制提交 ID 不参与发布版本比较；Go 伪版本仍按 Go 规则比较。
+
+`NewComparator` 复制分类中的顺序切片，比较器可并发复用；空分类只能用于识别旧记录，创建比较器必须显式声明类型。错误可通过 `errors.Is` 判断：
+
+- `versionrange.ErrInvalidClassification`：分类缺失、字段冲突或未知枚举。
+- `versionrange.ErrUnordered`：缺少顺序、清单外标签、包装不符或 Git 引用；与根包 `ErrIncomparableVersion` 为同一错误。
+- 根包 `ErrInvalidVersion`：版本不符合指定算法或使用通配符。
+- 根包 `ErrInvalidExpression`：可排序区间逆序或半开空区间。
+
+`Classification.ValidateRange` 允许 `GIT/UNKNOWN` 作为未决元数据保留，不代表这些范围已能匹配；调用方应显式处理 `ErrUnordered`，不能将其当作明确未命中。
+
+### 依赖约束
+
+生态规则固定使用 `deps.dev/util/semver v0.0.0-20261013100046-7bac2db56a63`，以复用已有生态实现并避免多套算法漂移；该依赖要求 Go 1.23.4。此子包不发起网络请求，不引入包管理器运行时；依赖升级必须执行生态边界及兼容测试。比较成本可用 `go test ./versionrange -run '^$' -bench . -benchmem` 复核，不使用无界全局缓存。
 
 ## 表达式语法
 
@@ -182,7 +236,7 @@ versioncompare.VersionExp{
 6. `MatchMain` 只忽略预发布与附加修订，仍会比较字母补丁号。
 7. 纯字母数字标签和 40 字符 commit ID 属于不透明版本：精确范围可以判断相等或不相等；需要建立大小顺序的 `Compare`、排序和聚合操作会对不同标签返回 `ErrIncomparableVersion`。
 
-因为 `+` 不按 SemVer build metadata 处理，若业务必须严格遵循某一生态的官方版本规范，应先确认该生态是否适合普通规则。
+因为根包普通规则不把 `+` 当作 SemVer build metadata，已明确生态的数据应使用上述 `versionrange` 分类比较接口。
 
 ## 操作系统软件包匹配
 
