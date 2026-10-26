@@ -13,6 +13,8 @@ import (
 const (
 	// TypeVersion 表示可以按已声明版本体系排序的发布版本范围。
 	TypeVersion = "VERSION"
+	// SchemeNormal 使用旧式通用发布版本规则，完整比较数字段、补丁字母及后缀。
+	SchemeNormal = "normal"
 	// TypeGit 表示依赖仓库引用或提交关系的范围，不能按字符串大小排序。
 	TypeGit = "GIT"
 	// TypeUnknown 表示没有足够信息确定比较语义，不能退回通用版本猜测。
@@ -28,7 +30,7 @@ var ErrInvalidClassification = errors.New("invalid version classification")
 
 // Classification 是每个范围携带的机器可读比较协议；所有字段为空表示历史数据。
 // RangeType 为 VERSION/GIT/UNKNOWN，VersionScheme 指定 VERSION 的比较算法；枚举不合法返回错误。
-// VersionPrefix/VersionSuffix 是明确声明的固定包装，边界与候选均必须满足。
+// normal 的 VersionPrefix/VersionSuffix 是可选规范化提示；其他专用策略要求边界和候选均满足包装。
 // 自定义标签只能按 VersionOrder 中的显式顺序比较，列表之外的版本返回 ErrUnordered。
 type Classification struct {
 	// RangeType 声明可排序发布版本、Git 引用或未知语义，对应 TypeVersion/TypeGit/TypeUnknown。
@@ -37,9 +39,9 @@ type Classification struct {
 	VersionScheme string `json:"version_scheme,omitempty"`
 	// RefKind 为 tag、commit、branch 或 alias；普通包版本留空。
 	RefKind string `json:"ref_kind,omitempty"`
-	// VersionPrefix 是比较前必须匹配并剥离的固定前缀，区分大小写。
+	// VersionPrefix 是比较前剥离的固定前缀，区分大小写；normal 未匹配时继续通用解析。
 	VersionPrefix string `json:"version_prefix,omitempty"`
-	// VersionSuffix 是比较前必须匹配并剥离的固定后缀，区分大小写。
+	// VersionSuffix 是比较前剥离的固定后缀，区分大小写；normal 未匹配时继续通用解析。
 	VersionSuffix string `json:"version_suffix,omitempty"`
 	// VersionOrder 仅供 custom 使用，列出从旧到新的完整原始标签；比较器会复制此切片。
 	VersionOrder []string `json:"version_order,omitempty"`
@@ -50,10 +52,15 @@ func (c Classification) Present() bool {
 	return c.RangeType != "" || c.VersionScheme != "" || c.RefKind != "" || c.VersionPrefix != "" || c.VersionSuffix != "" || len(c.VersionOrder) > 0
 }
 
-// Canonical 返回大小写规范化后的独立副本，不修改原始标签和包装字符串。
+// Canonical 返回规范分类副本，将 numeric/release/semver/calver/go/npm/cargo/nuget/composer 归并为 normal。
+// 不修改原始标签、包装字符串或输入切片；其他专用策略保持各自语义。
 func (c Classification) Canonical() Classification {
 	c.RangeType = strings.ToUpper(strings.TrimSpace(c.RangeType))
 	c.VersionScheme = strings.ToLower(strings.TrimSpace(c.VersionScheme))
+	switch c.VersionScheme {
+	case "numeric", "release", "semver", "calver", "go", "npm", "cargo", "nuget", "composer":
+		c.VersionScheme = SchemeNormal
+	}
 	c.RefKind = strings.ToLower(strings.TrimSpace(c.RefKind))
 	c.VersionOrder = append([]string(nil), c.VersionOrder...)
 	return c
@@ -77,7 +84,7 @@ func (c Classification) Validate() error {
 			return fmt.Errorf("%w: VERSION 只能描述发布版本或 tag，不能比较 commit/branch/alias", ErrInvalidClassification)
 		}
 		switch c.VersionScheme {
-		case "numeric", "semver", "pep440", "maven", "go", "npm", "cargo", "nuget", "rubygems", "composer", "calver", "dpkg", "rpm", "apk", "alpm", "custom":
+		case SchemeNormal, "pep440", "maven", "rubygems", "dpkg", "rpm", "apk", "alpm", "custom":
 		default:
 			return fmt.Errorf("%w: 未知 version_scheme %q", ErrInvalidClassification, c.VersionScheme)
 		}

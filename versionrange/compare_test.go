@@ -21,7 +21,7 @@ func TestEcosystemOrdering(t *testing.T) {
 		{"semver", "2.1.13", "v2.1.13-ga", 0},
 		{"semver", "2.1.13", "v2.1.13-custom", 0},
 		{"semver", "1.2.3-beta.2", "1.2.3-beta.11", -1},
-		{"semver", "1.2.3+build.1", "1.2.3+build.2", 0},
+		{"semver", "1.2.3+build.1", "1.2.3+build.2", -1},
 		{"pep440", "3.15.0a1", "3.15.0rc3", -1},
 		{"pep440", "1.0.dev1", "1.0a1", -1},
 		{"pep440", "1.0", "1.0.post1", -1},
@@ -78,8 +78,8 @@ func TestDeclaredTagFormats(t *testing.T) {
 		t.Fatalf("Compare() = %d, want -1", order)
 	}
 	_, err = compare.Compare("a999", "b1000")
-	if !errors.Is(err, ErrUnordered) {
-		t.Fatalf("error = %v, want ErrUnordered", err)
+	if err == nil {
+		t.Fatal("opaque label must remain invalid")
 	}
 	compare, err = NewComparator(Classification{RangeType: TypeVersion, VersionScheme: "semver", VersionSuffix: "(jdk8/11)"})
 	if err != nil {
@@ -92,9 +92,9 @@ func TestDeclaredTagFormats(t *testing.T) {
 	if order != -1 {
 		t.Fatalf("Compare() = %d, want -1", order)
 	}
-	_, err = compare.Compare("v2.6.0(jdk17)", "v2.7.0(jdk8/11)")
-	if !errors.Is(err, ErrUnordered) {
-		t.Fatalf("error = %v, want ErrUnordered", err)
+	order, err = compare.Compare("v2.6.0", "v2.7.0(jdk8/11)")
+	if err != nil || order != -1 {
+		t.Fatalf("optional normal wrapper = %d, %v", order, err)
 	}
 	compare, err = NewComparator(Classification{RangeType: TypeVersion, VersionScheme: "custom", VersionOrder: []string{"zeta", "alpha", "ulmo"}})
 	if err != nil {

@@ -109,18 +109,20 @@ err = classification.ValidateRange("3.15.0a1", "3.15.0rc3", false)
 
 | `range_type` / `version_scheme` | 比较语义 |
 | --- | --- |
-| `VERSION` / `numeric` | 任意精度数字段；尾部零等价 |
-| `VERSION` / `calver` | 点、横线或下划线分隔的日历数字段，不使用外部发布日期 |
-| `VERSION` / `semver`、`pep440`、`maven`、`go`、`npm`、`cargo`、`nuget`、`rubygems`、`composer` | `deps.dev/util/semver` 对应生态的版本顺序；不执行依赖范围解析 |
+| `VERSION` / `normal` | 复用根包通用解析，数字段、字母补丁和完整后缀参与比较；后缀数字按数值排序，不设 alpha/beta/rc 白名单 |
+| 历史 `numeric/release/semver/calver/go/npm/cargo/nuget/composer` | `Canonical()` 统一返回 `normal`，比较行为与 normal 相同 |
+| `VERSION` / `pep440`、`maven`、`rubygems` | 继续采用 `deps.dev/util/semver` 的对应生态规则 |
 | `VERSION` / `dpkg`、`rpm`、`apk`、`alpm` | 复用 `osversion` 的发行版原生顺序 |
 | `VERSION` / `custom` | 按 `version_order` 的完整原始标签顺序比较；清单外版本不可比较 |
 | `GIT`、`UNKNOWN` | 不推断顺序，创建比较器返回 `ErrUnordered`；不查询 Git 祖先关系 |
 
 分类字段使用同名 JSON：`range_type`、`version_scheme`、`ref_kind`、`version_prefix`、`version_suffix`、`version_order`。`VERSION` 的 `ref_kind` 只能为空或 `tag`；`GIT` 必须声明 `commit/tag/branch/alias`，且与 `UNKNOWN` 一样不携带 `version_scheme` 或数字包装。
 
-`version_prefix` / `version_suffix` 必须同时适用于边界和候选，例如 `numeric + version_prefix=b` 比较 `b999 < b1000`；`semver + version_suffix=(jdk8/11)` 比较 `v2.6.0(jdk8/11) < v2.7.0(jdk8/11)`。不符合包装的候选返回错误，不随意删字母。`custom` 使用完整原始标签，不能再配置包装。
+`normal` 的 `version_prefix` / `version_suffix` 是可选规范化提示：匹配时剥离，否则继续通用解析，不再因 native 缺少上游 `v` 前缀而失败。例如 `normal + version_prefix=b` 可以比较 `b999 < b1000`；`version_suffix=(jdk8/11)` 可以剥离已声明的运行时包装。其他专用生态和 OS 算法继续要求包装匹配；`custom` 使用完整原始标签，不能配置包装。
 
-发布标签支持 `release-` / `release_`、数字版本的 `v` 前缀和 `-stable/-final/-ga/-custom` 正式版别名；`numeric/semver` 也支持将 `r1v60`、`r1rv78` 识别为 `1.60`、`1.78`。OS 原生版本和 `custom` 不应用这些别名。40/64 位完整十六进制提交 ID 不参与发布版本比较；Go 伪版本仍按 Go 规则比较。
+normal 支持 `v2.10s`、`v2.13-pre4`、`v2.27-rc10`、任意可解析后缀，完整保留字母补丁和后缀；支持 `release-` / `release_`、`r1v60` / `r1rv78` 以及数字版本的 `-stable/-final/-ga/-custom` 正式版别名。40/64 位完整提交仍不可比较，命名版本使用 custom。
+
+**v1.1.1 的排序语义变更：** 上述九个历史分类名称不再使用独立生态排序，而使用旧式通用业务规则，例如 `rc2 < rc10`，`+build.1 < +build.2`。normal 始终完整比较后缀；根包的 `CompileOptions.MatchMain` 和 `StrictBoundaries` 行为不变，项目门禁仍可显式忽略预发布后缀。需要 Python、Maven、RubyGems 原生规则时继续声明对应专用策略。
 
 `NewComparator` 复制分类中的顺序切片，比较器可并发复用；空分类只能用于识别旧记录，创建比较器必须显式声明类型。错误可通过 `errors.Is` 判断：
 
@@ -236,7 +238,7 @@ versioncompare.VersionExp{
 6. `MatchMain` 只忽略预发布与附加修订，仍会比较字母补丁号。
 7. 纯字母数字标签和 40 字符 commit ID 属于不透明版本：精确范围可以判断相等或不相等；需要建立大小顺序的 `Compare`、排序和聚合操作会对不同标签返回 `ErrIncomparableVersion`。
 
-因为根包普通规则不把 `+` 当作 SemVer build metadata，已明确生态的数据应使用上述 `versionrange` 分类比较接口。
+根包和 `versionrange` 的 normal 均按通用业务规则处理 `+` 后缀，不保证严格 SemVer 的 build metadata 等价关系；这是 v1.1.1 对普通分类统一后的明确行为。
 
 ## 操作系统软件包匹配
 

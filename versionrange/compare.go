@@ -3,20 +3,19 @@ package versionrange
 import (
 	"errors"
 	"fmt"
-	"math/big"
 	"regexp"
 	"slices"
 	"strings"
 
 	"deps.dev/util/semver"
 	versioncompare "github.com/yanqin001/version-compare"
+	"github.com/yanqin001/version-compare/internal/versioncore"
 	"github.com/yanqin001/version-compare/osversion"
 )
 
 // 标签归一化沿用迁移前的完整匹配规则，只转换已知包装，避免把任意 Git 引用误当数字版本。
 var numericVersion = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)*$`)
 var fullCommit = regexp.MustCompile(`(?i)^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
-var calendarVersion = regexp.MustCompile(`^[0-9]+(?:[._-][0-9]+)*$`)
 var releaseAlias = regexp.MustCompile(`(?i)^(v?[0-9]+(?:\.[0-9]+)*)-(?:stable|final|ga|custom)$`)
 var releaseWrapper = regexp.MustCompile(`(?i)^release[-_](v?[0-9].*)$`)
 var releaseTag = regexp.MustCompile(`(?i)^r([0-9]+)r?v([0-9]+)(?:v([0-9]+))?([-+][0-9a-z][0-9a-z.+_-]*)?$`)
@@ -45,7 +44,8 @@ func NewComparator(classification Classification) (*Comparator, error) {
 
 // Compare 比较原始版本 a 与 b，成功返回 -1、0、1；错误时顺序值不可使用。
 // 非法版本返回根包 ErrInvalidVersion，缺少排序依据返回 ErrUnordered；未初始化返回 ErrInvalidClassification。
-// 边界与候选应用相同的包装规则；不会将 Git 哈希或未知标签按字典序比较。
+// 边界与候选应用相同的包装规则；normal 完整比较后缀，不启用 MatchMain，也不对后缀名称设白名单。
+// 不将 Git 哈希或不透明命名版本按字典序比较。
 func (c *Comparator) Compare(a, b string) (int, error) {
 	if c == nil || c.classification.RangeType != TypeVersion {
 		return 0, fmt.Errorf("%w: 比较器未初始化", ErrInvalidClassification)
@@ -70,14 +70,16 @@ func (c *Comparator) Compare(a, b string) (int, error) {
 	}
 	scheme := c.classification.VersionScheme
 	switch scheme {
-	case "numeric":
-		return compareNumeric(a, b)
-	case "calver":
-		if !calendarVersion.MatchString(a) || !calendarVersion.MatchString(b) {
-			return 0, fmt.Errorf("%w: 日历版本格式无效: %q / %q", versioncompare.ErrInvalidVersion, a, b)
+	case SchemeNormal:
+		left, err := parseNormal(a)
+		if err != nil {
+			return 0, err
 		}
-		replacer := strings.NewReplacer("-", ".", "_", ".")
-		return compareNumeric(replacer.Replace(a), replacer.Replace(b))
+		right, err := parseNormal(b)
+		if err != nil {
+			return 0, err
+		}
+		return versioncore.Compare(left, right, false)
 	case "dpkg", "rpm", "apk", "alpm":
 		// 旧库使用 0/1/2 表示小于/等于/大于，适配到标准比较器的 -1/0/1。
 		order, err := osversion.NewService().Compare(osversion.Distribution(scheme), a, b)
@@ -112,6 +114,14 @@ func (c *Comparator) InBranch(version, branch string) bool {
 	if err != nil {
 		return false
 	}
+	if c.classification.VersionScheme == SchemeNormal {
+		left, err := parseNormal(value)
+		if err != nil {
+			return false
+		}
+		right, err := parseNormal(branch)
+		return err == nil && versioncore.HasMainPrefix(left, right)
+	}
 	branch = strings.TrimPrefix(strings.TrimSpace(branch), "v")
 	value = strings.TrimPrefix(value, "v")
 	if !numericVersion.MatchString(branch) || !strings.HasPrefix(value, branch) {
@@ -120,14 +130,28 @@ func (c *Comparator) InBranch(version, branch string) bool {
 	return len(value) == len(branch) || strings.ContainsRune(".-+", rune(value[len(branch)]))
 }
 
-// normalize 仅剥离声明的标签包装及正式版别名，保留生态限定符和 OS 原生版本字符。
+// normalize 统一处理包装和正式版别名；normal 包装可选，专用策略仍执行原有严格包装校验。
 func (c *Comparator) normalize(version string) (string, error) {
 	value := strings.TrimSpace(version)
 	prefix, suffix := c.classification.VersionPrefix, c.classification.VersionSuffix
-	if !strings.HasPrefix(value, prefix) || !strings.HasSuffix(value, suffix) || len(value) <= len(prefix)+len(suffix) {
-		return "", fmt.Errorf("%w: %q 不符合已声明的版本包装", ErrUnordered, version)
+	if c.classification.VersionScheme == SchemeNormal {
+		// 旧分类中的 v 可能来自上游 Git 标签，native 原生数字版本也须进入相同的比较路径。
+		// 包装存在才剥离，不把缺失包装变成候选拒绝条件；后缀正文仍完整参与比较。
+		if prefix != "" && strings.HasPrefix(value, prefix) {
+			value = strings.TrimPrefix(value, prefix)
+		}
+		if suffix != "" && strings.HasSuffix(value, suffix) {
+			value = strings.TrimSuffix(value, suffix)
+		}
+	} else {
+		if !strings.HasPrefix(value, prefix) || !strings.HasSuffix(value, suffix) || len(value) <= len(prefix)+len(suffix) {
+			return "", fmt.Errorf("%w: %q 不符合已声明的版本包装", ErrUnordered, version)
+		}
+		value = value[len(prefix) : len(value)-len(suffix)]
 	}
-	value = value[len(prefix) : len(value)-len(suffix)]
+	if value == "" {
+		return "", fmt.Errorf("%w: 空版本", ErrUnordered)
+	}
 	switch c.classification.VersionScheme {
 	case "dpkg", "rpm", "apk", "alpm", "custom":
 		return value, nil
@@ -135,7 +159,7 @@ func (c *Comparator) normalize(version string) (string, error) {
 	if parts := releaseWrapper.FindStringSubmatch(value); parts != nil {
 		value = parts[1]
 	}
-	if c.classification.VersionScheme == "numeric" || c.classification.VersionScheme == "semver" {
+	if c.classification.VersionScheme == SchemeNormal {
 		if parts := releaseTag.FindStringSubmatch(value); parts != nil {
 			value = parts[1] + "." + parts[2]
 			if parts[3] != "" {
@@ -150,9 +174,6 @@ func (c *Comparator) normalize(version string) (string, error) {
 	}
 	if len(value) > 1 && (value[0] == 'v' || value[0] == 'V') && value[1] >= '0' && value[1] <= '9' {
 		value = value[1:]
-	}
-	if c.classification.VersionScheme == "go" {
-		value = "v" + value
 	}
 	return value, nil
 }
@@ -190,42 +211,11 @@ func ecosystemSystem(scheme string) semver.System {
 		return semver.PyPI
 	case "maven":
 		return semver.Maven
-	case "go":
-		return semver.Go
-	case "npm":
-		return semver.NPM
-	case "cargo":
-		return semver.Cargo
-	case "nuget":
-		return semver.NuGet
 	case "rubygems":
 		return semver.RubyGems
-	case "composer":
-		return semver.Composer
 	default:
 		return semver.DefaultSystem
 	}
-}
-
-// compareNumeric 使用任意精度数字避免构建号溢出，缺失的尾部段按零处理。
-func compareNumeric(a, b string) (int, error) {
-	if !numericVersion.MatchString(a) || !numericVersion.MatchString(b) {
-		return 0, fmt.Errorf("%w: 数字版本无效: %q / %q", versioncompare.ErrInvalidVersion, a, b)
-	}
-	left, right := strings.Split(a, "."), strings.Split(b, ".")
-	for index := 0; index < max(len(left), len(right)); index++ {
-		x, y := new(big.Int), new(big.Int)
-		if index < len(left) {
-			x.SetString(left[index], 10)
-		}
-		if index < len(right) {
-			y.SetString(right[index], 10)
-		}
-		if order := x.Cmp(y); order != 0 {
-			return order, nil
-		}
-	}
-	return 0, nil
 }
 
 func sign(value int) int {
