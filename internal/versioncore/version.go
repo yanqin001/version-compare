@@ -43,13 +43,14 @@ type Version struct {
 
 // Parse 将 input 解析为可比较版本。
 // kind 控制连字符数字的解释方式；返回值不引用 input 之外的可变数据。
+// 完整的 r 数字发布标签会移除包装前缀，保留后缀及原有比较语义；原始输入仍由 Original 返回。
 func Parse(input string, kind Kind) (Version, error) {
 	if kind != Normal && kind != GenericOS {
 		return Version{}, fmt.Errorf("%w: kind %d", ErrInvalidVersion, kind)
 	}
 
 	original := input
-	normalized := normalize(input)
+	normalized := normalize(stripRevisionTagPrefix(strings.TrimSpace(input)))
 	if normalized == "" {
 		return Version{}, ErrEmptyVersion
 	}

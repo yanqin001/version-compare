@@ -122,6 +122,8 @@ err = classification.ValidateRange("3.15.0a1", "3.15.0rc3", false)
 
 normal 支持 `v2.10s`、`v2.13-pre4`、`v2.27-rc10`、任意可解析后缀，完整保留字母补丁和后缀；支持 `release-` / `release_`、`r1v60` / `r1rv78` 以及数字版本的 `-stable/-final/-ga/-custom` 正式版别名。40/64 位完整提交仍不可比较，命名版本使用 custom。
 
+从 v1.1.2 起，根包普通版本、GenericOSVersion 和 normal 共同支持完整的 `r`/`R` 数字发布标签：`r36`、`r36-p1`、`R36-p10`、`r36.1-p2`。仅移除包装前缀，后缀和原有排序保持一致：`r36-p1 < r36-p2 < r36-p10 < r36 < r37`；`p1` 不会转换为小版本，也不自动视为正式版之后的补丁。精确值、范围边界、候选和固定修复版本使用相同规则，显式 MatchMain 仍可忽略后缀。该转换不适用于原生 OS 算法，也不从分支路径或任意前置文字中截取 r 标签。
+
 **v1.1.1 的排序语义变更：** 上述九个历史分类名称不再使用独立生态排序，而使用旧式通用业务规则，例如 `rc2 < rc10`，`+build.1 < +build.2`。normal 始终完整比较后缀；根包的 `CompileOptions.MatchMain` 和 `StrictBoundaries` 行为不变，项目门禁仍可显式忽略预发布后缀。需要 Python、Maven、RubyGems 原生规则时继续声明对应专用策略。
 
 `NewComparator` 复制分类中的顺序切片，比较器可并发复用；空分类只能用于识别旧记录，创建比较器必须显式声明类型。错误可通过 `errors.Is` 判断：
