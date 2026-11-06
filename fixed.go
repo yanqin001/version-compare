@@ -13,6 +13,31 @@ type compiledFixed struct {
 	version versioncore.Version
 }
 
+// NormalizeInferredFixedBranch 校正调用方自动推导的维护分支，不改变版本比较规则。
+// branch 是自动推导结果，kind 指定普通或通用 OS 解析规则；合法分支原样返回，
+// 仅携带预发布或修订后缀的非法分支改为数字主版本，例如 1.10b1 返回 1.10。
+// 空值、无法解析或不透明标识返回错误；本函数不校验修复版本是否属于该分支，仍由 Compile 校验。
+// 调用方只能对自动推导分支使用本函数，不得用于改写用户显式指定的分支。
+func NormalizeInferredFixedBranch(branch string, kind VersionKind) (string, error) {
+	coreVersionKind, err := coreKind(kind)
+	if err != nil {
+		return "", err
+	}
+	parsed, err := versioncore.Parse(branch, coreVersionKind)
+	if err != nil {
+		return "", translateVersionError(err)
+	}
+	if parsed.IsOpaque() {
+		return "", fmt.Errorf("%w: invalid inferred fixed branch %q", ErrInvalidExpression, branch)
+	}
+	if !parsed.HasSuffix() {
+		// 合法字母补丁分支（如 2.10s）必须保持原样，不能扩大为整个 2.10 分支。
+		return branch, nil
+	}
+	// 1.10b1 中的 b 被通用解析器保留为字母补丁，1 为后缀；校正时二者都不能留在数字维护分支中。
+	return parsed.MainString(), nil
+}
+
 func parseLegacyFixed(values []string, kind VersionKind) ([]FixedVersion, error) {
 	if len(values) == 0 {
 		return nil, nil
