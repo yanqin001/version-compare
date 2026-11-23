@@ -27,9 +27,11 @@ type compiledInterval struct {
 // Matcher 在编译后不再修改内部状态，可由多个 goroutine 并发调用。零值 Matcher
 // 不可用，应通过 Compile 创建。
 type Matcher struct {
-	any              bool
-	kind             versioncore.Kind
-	intervals        []compiledInterval
+	any       bool
+	kind      versioncore.Kind
+	intervals []compiledInterval
+	// armIntervals 与普通区间分别保存，避免两种编号体系在并集中互相匹配。
+	armIntervals     []compiledInterval
 	fixed            []compiledFixed
 	matchMain        bool
 	strictBoundaries bool
@@ -37,6 +39,7 @@ type Matcher struct {
 
 // Compile 编译漏洞范围及固定版本分支。
 // expression 是漏洞范围，options 指定版本类型、固定分支和边界匹配行为。
+// 有界端点均为 rMpN 的区间按两段数字比较，仅接受同格式候选，不使用普通版本的固定分支。
 // 表达式、版本类型或固定分支无效时会打印日志并返回可通过 errors.Is 检查的错误。
 func Compile(expression string, options CompileOptions) (*Matcher, error) {
 	matcher, err := compile(expression, options)
@@ -72,11 +75,19 @@ func compile(expression string, options CompileOptions) (*Matcher, error) {
 
 	matcher.intervals = make([]compiledInterval, 0, len(parsedExpression.Intervals))
 	for _, interval := range parsedExpression.Intervals {
+		interval, arm, err := normalizeArmInterval(interval)
+		if err != nil {
+			return nil, err
+		}
 		compiled, compileErr := compileInterval(interval, kind)
 		if compileErr != nil {
 			return nil, compileErr
 		}
-		matcher.intervals = append(matcher.intervals, compiled)
+		if arm {
+			matcher.armIntervals = append(matcher.armIntervals, compiled)
+		} else {
+			matcher.intervals = append(matcher.intervals, compiled)
+		}
 	}
 	return matcher, nil
 }
@@ -93,11 +104,27 @@ func (m *Matcher) Match(version string) (bool, error) {
 }
 
 func (m *Matcher) match(version string) (bool, error) {
-	if m == nil || (len(m.intervals) == 0 && !m.any) {
+	if m == nil || (len(m.intervals) == 0 && len(m.armIntervals) == 0 && !m.any) {
 		return false, fmt.Errorf("%w: uninitialized matcher", ErrInvalidExpression)
 	}
 	if strings.TrimSpace(version) == "" {
 		return false, nil
+	}
+	if len(m.armIntervals) != 0 {
+		if base, suffix, ok := splitArmRelease(version); ok {
+			if suffix != "" && !isArmPackageSuffix(suffix) {
+				return false, nil
+			}
+			// 只在同格式区间内使用数字规范化结果，不能拿 31.0 当作普通候选或套用普通分支修复版本。
+			candidate, err := versioncore.Parse(base, m.kind)
+			if err != nil {
+				return false, translateVersionError(err)
+			}
+			return m.matchIntervals(candidate, m.armIntervals, false)
+		}
+		if len(m.intervals) == 0 {
+			return false, nil
+		}
 	}
 	candidate, err := versioncore.Parse(version, m.kind)
 	if err != nil {
@@ -106,8 +133,13 @@ func (m *Matcher) match(version string) (bool, error) {
 	if m.any {
 		return true, nil
 	}
-	for _, interval := range m.intervals {
-		matched, matchErr := m.matchInterval(candidate, interval)
+	return m.matchIntervals(candidate, m.intervals, true)
+}
+
+// matchIntervals 仅比较同一编号体系的区间；fixed 为 true 时允许普通维护分支收紧上界。
+func (m *Matcher) matchIntervals(candidate versioncore.Version, intervals []compiledInterval, fixed bool) (bool, error) {
+	for _, interval := range intervals {
+		matched, matchErr := m.matchInterval(candidate, interval, fixed)
 		if matchErr != nil {
 			return false, matchErr
 		}
@@ -172,7 +204,7 @@ func compileBound(bound rangeexpr.Bound, kind versioncore.Kind) (compiledBound, 
 	}, nil
 }
 
-func (m *Matcher) matchInterval(candidate versioncore.Version, interval compiledInterval) (bool, error) {
+func (m *Matcher) matchInterval(candidate versioncore.Version, interval compiledInterval, fixed bool) (bool, error) {
 	if interval.exact {
 		comparison, err := versioncore.Compare(candidate, interval.lower.version, m.boundMatchMain(interval.lower))
 		if errors.Is(err, versioncore.ErrIncomparable) {
@@ -191,9 +223,13 @@ func (m *Matcher) matchInterval(candidate versioncore.Version, interval compiled
 		}
 	}
 
-	upper, err := m.effectiveUpper(candidate, interval.upper)
-	if err != nil {
-		return false, err
+	upper := interval.upper
+	if fixed {
+		var err error
+		upper, err = m.effectiveUpper(candidate, upper)
+		if err != nil {
+			return false, err
+		}
 	}
 	if upper.set {
 		comparison, compareErr := versioncore.Compare(candidate, upper.version, m.boundMatchMain(upper))
